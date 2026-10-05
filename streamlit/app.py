@@ -127,7 +127,107 @@ def figure_repartition(donnees):
     ax.legend()
     return fig
 
+# ---------------------------------------------------------------- graphiques de l'onglet « Analyses du notebook »
+def figure_log(rfm):
+    """Question 1 : distributions avant et après log1p."""
+    fig, axes = plt.subplots(2, 3, figsize=(15, 7))
+    for j, var in enumerate(VARIABLES):
+        brut = rfm[var]
+        log = np.log1p(rfm[var])
+        axes[0, j].hist(brut, bins=40, color='#9ecae1')
+        axes[0, j].set_title(f"{var} (brut) - asymétrie {brut.skew():.2f}")
+        axes[1, j].hist(log, bins=40, color='#3182bd')
+        axes[1, j].set_title(f"{var} (log1p) - asymétrie {log.skew():.2f}")
+    fig.tight_layout()
+    return fig
 
+
+def figure_correlations(rfm):
+    """Question 2 : corrélations entre R, F et M après log1p."""
+    corr = np.log1p(rfm[VARIABLES]).corr()
+    fig, ax = plt.subplots(figsize=(6, 4.5))
+    image = ax.imshow(corr, cmap='coolwarm', vmin=-1, vmax=1)
+    ax.set_xticks(range(len(VARIABLES)))
+    ax.set_xticklabels(VARIABLES)
+    ax.set_yticks(range(len(VARIABLES)))
+    ax.set_yticklabels(VARIABLES)
+    for i in range(len(VARIABLES)):
+        for j in range(len(VARIABLES)):
+            ax.text(j, i, f"{corr.iloc[i, j]:.2f}", ha='center', va='center')
+    fig.colorbar(image)
+    ax.set_title('Corrélations entre R, F et M (après log1p)')
+    return fig
+
+
+def figure_pareto(rfm):
+    """Question 3 : concentration du chiffre d'affaires."""
+    ca = rfm['Monetary'].sort_values(ascending=False).reset_index(drop=True)
+    part_clients = (np.arange(1, len(ca) + 1) / len(ca)) * 100
+    part_ca = ca.cumsum() / ca.sum() * 100
+    top20 = part_ca[int(0.2 * len(ca)) - 1]
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.plot(part_clients, part_ca, label='Courbe de concentration')
+    ax.plot([0, 100], [0, 100], '--', color='grey', label='Répartition égale')
+    ax.axvline(20, color='red', linestyle=':')
+    ax.axhline(top20, color='red', linestyle=':')
+    ax.set_xlabel('% des clients (classés du plus gros au plus petit)')
+    ax.set_ylabel("% du chiffre d'affaires cumulé")
+    ax.set_title(f"Les 20 % meilleurs clients font {top20:.0f} % du CA")
+    ax.legend()
+    return fig
+
+
+@st.cache_data
+def evaluer_k(valeurs_k=tuple(range(2, 11))):
+    """Question 4 : inertie et silhouette pour plusieurs valeurs de K."""
+    from sklearn.metrics import silhouette_score
+    modele = construire_modele()
+    X = modele['scaler'].transform(np.log1p(modele['data'][VARIABLES]))
+    lignes = []
+    for k in valeurs_k:
+        km = KMeans(n_clusters=k, random_state=0, n_init=10).fit(X)
+        lignes.append({'K': k, 'Inertie': km.inertia_, 'Silhouette': silhouette_score(X, km.labels_)})
+    return pd.DataFrame(lignes)
+
+
+def figure_choix_k(evaluation):
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4))
+    axes[0].plot(evaluation['K'], evaluation['Inertie'], marker='o')
+    axes[0].set_title("Méthode de l'Elbow")
+    axes[0].set_xlabel('Nombre de clusters (K)')
+    axes[0].set_ylabel('Inertie')
+    axes[1].plot(evaluation['K'], evaluation['Silhouette'], marker='o', color='green')
+    axes[1].set_title('Score de silhouette')
+    axes[1].set_xlabel('Nombre de clusters (K)')
+    axes[1].set_ylabel('Silhouette')
+    for ax in axes:
+        ax.axvline(K, color='red', linestyle=':', label=f'K retenu = {K}')
+        ax.legend()
+    fig.tight_layout()
+    return fig
+
+
+def figure_profils(modele):
+    """Question 5 : profil moyen des segments (variables standardisées)."""
+    donnees = modele['data']
+    z = pd.DataFrame(modele['scaler'].transform(np.log1p(donnees[VARIABLES])), columns=VARIABLES)
+    z['Segment'] = donnees['Segment'].values
+    profil = z.groupby('Segment')[VARIABLES].mean().loc[list(COULEURS)]
+    limite = float(np.abs(profil.values).max())
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    image = ax.imshow(profil, cmap='coolwarm', vmin=-limite, vmax=limite, aspect='auto')
+    ax.set_xticks(range(len(VARIABLES)))
+    ax.set_xticklabels(VARIABLES)
+    ax.set_yticks(range(len(profil)))
+    ax.set_yticklabels(profil.index)
+    for i in range(len(profil)):
+        for j in range(len(VARIABLES)):
+            ax.text(j, i, f"{profil.iloc[i, j]:.2f}", ha='center', va='center')
+    fig.colorbar(image)
+    ax.set_title('Profil moyen des segments (variables standardisées)')
+    return fig
 # ---------------------------------------------------------------- interface
 modele = construire_modele()
 donnees = modele['data']
@@ -140,7 +240,9 @@ st.sidebar.header("Filtres")
 segments_choisis = st.sidebar.multiselect("Segments affichés", options=list(COULEURS), default=list(COULEURS))
 st.sidebar.caption("Le filtre s'applique à l'onglet « Exploration ».")
 
-onglet_exploration, onglet_qualification = st.tabs(["📊 Exploration", "🎯 Qualification client"])
+onglet_exploration, onglet_qualification, onglet_notebook = st.tabs(
+    ["📊 Exploration", "🎯 Qualification client", "📚 Analyses du notebook"]
+)
 
 # ------------------------------------------------ onglet 1 : exploration
 with onglet_exploration:
@@ -228,3 +330,55 @@ with onglet_qualification:
             fig = figure_pca(donnees, modele['pca'], point=coords)
             st.pyplot(fig)
             plt.close(fig)
+
+            # ------------------------------------------------ onglet 3 : analyses du notebook
+with onglet_notebook:
+    st.header("Analyses du notebook")
+    st.write("Les cinq questions d'analyse du notebook, avec leurs graphiques et leurs commentaires.")
+
+    # Question 1
+    st.subheader("Question 1 : pourquoi faut-il transformer les variables avec log1p ?")
+    fig = figure_log(donnees)
+    st.pyplot(fig)
+    plt.close(fig)
+    st.markdown("**Commentaire :** ce graphique compare les distributions avant (ligne du haut) et après (ligne du bas) la transformation `log1p`. Nous voulons démontrer que la fréquence et surtout le montant sont très asymétriques : la plupart des clients dépensent peu, et quelques-uns dépensent énormément. Sans transformation, ces valeurs extrêmes domineraient le calcul des distances et fausseraient K-means. Après `log1p`, les distributions sont beaucoup plus équilibrées, ce qui justifie cette étape de prétraitement.")
+
+    # Question 2
+    st.subheader("Question 2 : les trois variables RFM apportent-elles des informations différentes ?")
+    fig = figure_correlations(donnees)
+    st.pyplot(fig)
+    plt.close(fig)
+    st.markdown("**Commentaire :** nous cherchons à savoir si certaines variables sont redondantes avant le clustering. La fréquence et le montant sont fortement corrélés : un client qui commande souvent dépense logiquement davantage. La récence est corrélée négativement aux deux : les clients récents sont aussi les plus actifs. Nous conservons néanmoins les trois variables, car elles décrivent trois dimensions complémentaires du comportement d'achat.")
+
+    # Question 3
+    st.subheader("Question 3 : le chiffre d'affaires dépend-il d'un petit nombre de clients ?")
+    fig = figure_pareto(donnees)
+    st.pyplot(fig)
+    plt.close(fig)
+    st.markdown("**Commentaire :** cette courbe de concentration (type Pareto) montre quelle part du chiffre d'affaires est générée par les meilleurs clients. Plus la courbe s'éloigne de la diagonale (répartition égale), plus l'activité est concentrée. Nous voulons démontrer que tous les clients n'ont pas la même valeur, ce qui justifie la segmentation : les actions marketing doivent être différentes selon les groupes.")
+
+    # Question 4
+    st.subheader("Question 4 : combien de segments de clients distincts existe-t-il ?")
+    evaluation = evaluer_k()
+    fig = figure_choix_k(evaluation)
+    st.pyplot(fig)
+    plt.close(fig)
+    st.dataframe(evaluation.round(3))
+    st.markdown("**Commentaire :** nous cherchons le nombre de clusters à retenir avec deux critères complémentaires : l'inertie (le coude de la courbe) et le score de silhouette (qualité de la séparation des clusters). Ici, le coude est progressif et peu net. La silhouette est la plus élevée pour K = 2, mais cette solution sépare seulement les clients actifs des clients inactifs, ce qui est trop grossier pour un usage marketing. Nous retenons donc K = 4, un compromis entre qualité statistique et segments interprétables.")
+
+    # Question 5
+    st.subheader("Question 5 : quels sont les profils des segments et leur poids économique ?")
+    fig = figure_profils(modele)
+    st.pyplot(fig)
+    plt.close(fig)
+    resume = donnees.groupby('Segment').agg(
+        Clients=('CustomerID', 'count'),
+        Recency=('Recency', 'mean'),
+        Frequency=('Frequency', 'mean'),
+        Monetary=('Monetary', 'mean'),
+        CA_total=('Monetary', 'sum'),
+    ).loc[list(COULEURS)]
+    resume['% clients'] = resume['Clients'] / resume['Clients'].sum() * 100
+    resume['% CA'] = resume['CA_total'] / resume['CA_total'].sum() * 100
+    st.dataframe(resume.drop(columns='CA_total').round(1))
+    st.markdown("**Commentaire :** la heatmap montre, pour chaque segment, si ses clients sont au-dessus (rouge) ou en dessous (bleu) de la moyenne sur chaque variable, ce qui permet de nommer les segments. Les **meilleurs clients** sont peu nombreux mais font l'essentiel du chiffre d'affaires, alors que les **clients perdus** sont nombreux pour un poids économique très faible. Chaque segment appelle donc une action marketing différente : fidéliser les meilleurs clients, développer les réguliers, activer les nouveaux et relancer les inactifs.")
